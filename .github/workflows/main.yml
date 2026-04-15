@@ -5,7 +5,6 @@ on:
     branches: [ "main" ]
 
 jobs:
-  # [기존 작업] 이미지 빌드 및 푸시
   build-and-push:
     runs-on: ubuntu-latest
 
@@ -26,35 +25,46 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/my-ml-app:latest
-    # [추가 작업] GCP VM에 배포
+
   deploy:
-    needs: build-and-push # 빌드가 성공해야 배포 시작
+    needs: build-and-push
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Deploy to GCP VM via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.GCP_VM_HOST }}         # VM의 외부 IP
-          username: ${{ secrets.GCP_VM_USERNAME }} # SSH 접속 계정 (보통 gcp 계정 이름)
-          key: ${{ secrets.GCP_SSH_KEY }}          # ##SSH Private Key
+          host: ${{ secrets.GCP_VM_HOST }}
+          username: ${{ secrets.GCP_VM_USERNAME }}
+          key: ${{ secrets.GCP_SSH_KEY }}
           port: 22
           script: |
-            # 1. Docker 로그인 (Private 레포지토리인 경우 필요)
+            set -e
+
+            # 1. Docker 로그인
             echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
-            
-            # 2. 기존 컨테이너 중지 및 삭제 (이미 실행 중인 경우)
+
+            # 2. 기존 배포 컨테이너 정리
             docker stop my-app-container || true
             docker rm my-app-container || true
-            
-            # 3. 최신 이미지 Pull
+
+            # 3. 80번 포트를 잡고 있던 기존 수동 실행 컨테이너 정리
+            docker stop nice_wilbur || true
+            docker rm nice_wilbur || true
+
+            # 4. 최신 이미지 Pull
             docker pull ${{ secrets.DOCKERHUB_USERNAME }}/my-ml-app:latest
-            
-            # 4. 새 컨테이너 실행
+
+            # 5. 새 컨테이너 실행
             docker run -d \
               --name my-app-container \
+              --restart unless-stopped \
               -p 80:8000 \
               ${{ secrets.DOCKERHUB_USERNAME }}/my-ml-app:latest
-            
-            # 5. 미사용 이미지 정리 (용량 관리)
+
+            # 6. 실행 확인
+            docker ps
+            docker logs --tail 50 my-app-container || true
+
+            # 7. 미사용 이미지 정리
             docker image prune -f
